@@ -106,15 +106,25 @@ def load_eeg_file(patient_id, task_type='resting', verbose=False):
         raise ValueError(f"Unknown task type: {task_type}")
     
     # Try each possible filename
+    # Account for nested directory structure (e.g., M1_1/M1_1/ or C1/C1/)
     filepath = None
+    possible_paths = []
     for filename in possible_names:
+        # Try nested directory first (most common case)
+        test_path = BASE_DIR / folder_name / folder_name / filename
+        possible_paths.append(str(test_path))
+        if test_path.exists():
+            filepath = test_path
+            break
+        
+        # Try direct directory (fallback)
         test_path = BASE_DIR / folder_name / filename
         if test_path.exists():
             filepath = test_path
             break
     
     if filepath is None:
-        raise FileNotFoundError(f"EEG file not found for {patient_id} - {task_type}. Tried: {possible_names}")
+        raise FileNotFoundError(f"EEG file not found for {patient_id} - {task_type}. Tried: {possible_paths}")
     
     # Load using MNE
     # Set preload=True to load data into memory
