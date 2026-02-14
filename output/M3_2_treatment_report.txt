@@ -1,0 +1,43 @@
+======================================================================
+PERSONALIZED BINAURAL BEAT THERAPY REPORT
+======================================================================
+
+Patient ID: M3_2
+Age: 19
+Gender: Female
+Classification: Migraine without Aura
+
+----------------------------------------------------------------------
+
+EEG ANALYSIS:
+  Dominant Band: NORMAL
+  Delta Ratio: 0.06%
+  Theta Ratio: 0.04%
+  Alpha Ratio: 99.83%
+  Beta Ratio: 0.03%
+
+----------------------------------------------------------------------
+
+BINAURAL BEAT PRESCRIPTION:
+  Carrier Frequency: 150.0 Hz
+  Beat Frequency: 7.8 Hz
+  Target Brain State: Theta (Deep Relaxation)
+
+----------------------------------------------------------------------
+
+USAGE INSTRUCTIONS:
+  1. Use stereo headphones (binaural beats require separate ear channels)
+  2. Listen for 10-15 minutes in a quiet, comfortable environment
+  3. Recommended: Daily use, especially during prodrome phase
+  4. Volume: Low to moderate (comfortable listening level)
+  5. Do NOT listen while driving or operating machinery
+
+----------------------------------------------------------------------
+
+DISCLAIMER:
+  This is an experimental therapeutic approach based on EEG analysis
+  and neuroscience research. It should complement, not replace,
+  conventional medical treatment. Consult with a healthcare
+  professional before use.
+
+======================================================================

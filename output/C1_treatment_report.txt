@@ -1,0 +1,43 @@
+======================================================================
+PERSONALIZED BINAURAL BEAT THERAPY REPORT
+======================================================================
+
+Patient ID: C1
+Age: 20
+Gender: Female
+Classification: Control
+
+----------------------------------------------------------------------
+
+EEG ANALYSIS:
+  Dominant Band: NORMAL
+  Delta Ratio: 22.21%
+  Theta Ratio: 18.79%
+  Alpha Ratio: 14.21%
+  Beta Ratio: 17.05%
+
+----------------------------------------------------------------------
+
+BINAURAL BEAT PRESCRIPTION:
+  Carrier Frequency: 180.0 Hz
+  Beat Frequency: 10.8 Hz
+  Target Brain State: Alpha (Calm Focus)
+
+----------------------------------------------------------------------
+
+USAGE INSTRUCTIONS:
+  1. Use stereo headphones (binaural beats require separate ear channels)
+  2. Listen for 10-15 minutes in a quiet, comfortable environment
+  3. Recommended: Daily use, especially during prodrome phase
+  4. Volume: Low to moderate (comfortable listening level)
+  5. Do NOT listen while driving or operating machinery
+
+----------------------------------------------------------------------
+
+DISCLAIMER:
+  This is an experimental therapeutic approach based on EEG analysis
+  and neuroscience research. It should complement, not replace,
+  conventional medical treatment. Consult with a healthcare
+  professional before use.
+
+======================================================================
