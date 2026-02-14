@@ -7,7 +7,7 @@ import pandas as pd
 import pickle
 from pathlib import Path
 import sys
-sys.path.insert(0, '/Users/mahmudulmashrafe/Programming/FYDP/3/src')
+sys.path.insert(0, str(Path(__file__).parent))
 
 from data_loader import load_clinical_data, get_all_patient_ids
 from feature_extraction import extract_all_features

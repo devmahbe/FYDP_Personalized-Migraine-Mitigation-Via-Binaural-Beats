@@ -234,7 +234,8 @@ def load_model(filepath='models/migraine_classifier.pkl'):
 if __name__ == "__main__":
     """Train and evaluate classifier"""
     import sys
-    sys.path.insert(0, '/Users/mahmudulmashrafe/Programming/FYDP/3/src')
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent))
     
     from dataset_builder import load_dataset
     

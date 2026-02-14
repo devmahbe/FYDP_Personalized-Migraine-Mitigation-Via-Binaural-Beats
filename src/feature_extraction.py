@@ -270,7 +270,8 @@ def extract_all_features(patient_id, task='resting', verbose=False):
 if __name__ == "__main__":
     """Test feature extraction"""
     import sys
-    sys.path.insert(0, '/Users/mahmudulmashrafe/Programming/FYDP/3/src')
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent))
     
     print("=" * 60)
     print("Testing Feature Extraction Module")

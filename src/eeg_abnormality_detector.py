@@ -8,7 +8,7 @@ from scipy import stats
 import pickle
 from pathlib import Path
 import sys
-sys.path.insert(0, '/Users/mahmudulmashrafe/Programming/FYDP/3/src')
+sys.path.insert(0, str(Path(__file__).parent))
 
 
 def build_control_database(control_patients, save_path='data/control_database.pkl'):

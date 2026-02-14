@@ -3,7 +3,8 @@ Main Pipeline Module
 End-to-end pipeline for migraine classification and binaural beat generation
 """
 import sys
-sys.path.insert(0, '/Users/mahmudulmashrafe/Programming/FYDP/3/src')
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
 
 import numpy as np
 from pathlib import Path

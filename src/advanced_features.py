@@ -301,7 +301,8 @@ def extract_advanced_all_features(patient_id, tasks_data, verbose=False):
 if __name__ == "__main__":
     """Test advanced features"""
     import sys
-    sys.path.insert(0, '/Users/mahmudulmashrafe/Programming/FYDP/3/src')
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent))
     
     from data_loader import load_all_tasks
     

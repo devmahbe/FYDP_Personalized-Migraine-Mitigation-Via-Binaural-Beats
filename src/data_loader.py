@@ -9,7 +9,22 @@ import numpy as np
 from pathlib import Path
 
 # Base directory for dataset
-BASE_DIR = Path("EEG Dataset and Migrain Patient")
+# Get the project root directory (one level up from src/)
+SCRIPT_DIR = Path(__file__).resolve().parent  # This is the 'src' directory
+PROJECT_ROOT = SCRIPT_DIR.parent  # Go up one level to project root
+BASE_DIR = PROJECT_ROOT / "Dataset"
+
+# Fallback: If Dataset folder doesn't exist, try to find it
+if not BASE_DIR.exists():
+    # Try to find Dataset folder from current working directory
+    cwd_dataset = Path.cwd() / "Dataset"
+    if cwd_dataset.exists():
+        BASE_DIR = cwd_dataset
+    else:
+        # Last resort: use absolute path if we're in the expected location
+        possible_path = Path(r"G:\Study\FYDP-I_Personalized-Migraine-Mitigation-Via-Binaural-Beats\Dataset")
+        if possible_path.exists():
+            BASE_DIR = possible_path
 
 # Patients to exclude based on README
 EXCLUDED_PATIENTS = ['M2', 'M6', 'M13', 'M18']
@@ -26,6 +41,15 @@ def load_clinical_data(exclude_problematic=True):
         pandas.DataFrame with clinical information
     """
     filepath = BASE_DIR / "Migraine_Control_Demographics.xlsx"
+    
+    # Check if file exists and provide helpful error message
+    if not filepath.exists():
+        raise FileNotFoundError(
+            f"Clinical data file not found at: {filepath}\n"
+            f"BASE_DIR is set to: {BASE_DIR}\n"
+            f"Please ensure the Dataset folder contains Migraine_Control_Demographics.xlsx"
+        )
+    
     df = pd.read_excel(filepath)
     
     if exclude_problematic:
