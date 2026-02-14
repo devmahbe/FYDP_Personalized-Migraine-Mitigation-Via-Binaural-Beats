@@ -263,20 +263,6 @@ Notice how even among healthy controls of similar age, the frequencies varied fr
 
 **In other words**: Think of this as a high-tech relaxation tool informed by your brain patterns, not a medical device. Always talk to your doctor about migraine management.
 
-### How to Use the Audio Safely
-
-**DO:**
-- ✅ Use **stereo headphones** - this is non-negotiable for binaural beats to work (your brain needs different frequencies in each ear)
-- ✅ Keep volume comfortable - you don't need it loud for the effect to work
-- ✅ Find a quiet, relaxed environment - lying down with eyes closed works great
-- ✅ Give it time - 10-15 minutes minimum for your brain to entrain
-
-**DON'T:**
-- ❌ Use while driving, operating machinery, or doing anything requiring alertness
-- ❌ Use if you have epilepsy without consulting your doctor first (audio stimulation can trigger seizures in susceptible individuals)
-- ❌ Push through discomfort - if it feels wrong, stop
-- ❌ Expect instant miracles - this is about gradual neurological influence
-
 ### Dataset Reality Check
 
 Our dataset has 31 patients. That's... not huge:
