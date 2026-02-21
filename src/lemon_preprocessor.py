@@ -104,6 +104,7 @@ class UnifiedEEGPreprocessor:
     def keep_eeg_channels_only(self, raw: mne.io.Raw, keep_eog: bool = True) -> mne.io.Raw:
         """
         Remove non-EEG channels (keep EOG temporarily for ICA).
+        Also filters out auxiliary/physiological channels by name patterns.
         
         Args:
             raw: Raw MNE object
@@ -118,8 +119,34 @@ class UnifiedEEGPreprocessor:
         picks = mne.pick_types(raw.info, eeg=True, eog=keep_eog, ecg=False, 
                                stim=False, misc=False, exclude='bads')
         
-        raw_eeg = raw.copy().pick(picks)
-        self.log(f"✓ Retained {raw_eeg.info['nchan']} channels (EEG + EOG)")
+        # Additional filtering: Remove auxiliary/physiological channels by name patterns
+        # These are often mislabeled as 'eeg' type but aren't scalp EEG
+        non_eeg_patterns = [
+            'GSR', 'gsr',  # Galvanic skin response
+            'Erg', 'erg',  # Ergometer/effort
+            'Resp', 'resp', 'RESP',  # Respiration
+            'Temp', 'temp', 'TEMP',  # Temperature  
+            'Plet', 'plet', 'PLET',  # Plethysmography
+            'ECG', 'ecg', 'EKG',  # Electrocardiogram
+            'EMG', 'emg',  # Electromyogram
+            'Trigger', 'Status',  # Trigger/status channels
+        ]
+        
+        # Filter picks to exclude channels matching auxiliary patterns
+        filtered_picks = []
+        for pick in picks:
+            ch_name = raw.ch_names[pick]
+            # Check if channel name contains any non-EEG pattern
+            is_aux = any(pattern in ch_name for pattern in non_eeg_patterns)
+            if not is_aux:
+                filtered_picks.append(pick)
+        
+        n_removed = len(picks) - len(filtered_picks)
+        if n_removed > 0:
+            self.log(f"  Filtered out {n_removed} auxiliary/physiological channels")
+        
+        raw_eeg = raw.copy().pick(filtered_picks)
+        self.log(f"✓ Retained {raw_eeg.info['nchan']} channels (EEG + EOG only)")
         
         return raw_eeg
     
@@ -284,6 +311,8 @@ class UnifiedEEGPreprocessor:
     def interpolate_bad_channels(self, raw: mne.io.Raw, bad_channels: List[str]) -> mne.io.Raw:
         """
         Interpolate bad channels using spherical splines.
+        Tries multiple standard montages to find the best match.
+        CRITICAL: Does not interpolate if >15% of channels are bad (rejects recording).
         
         Args:
             raw: Raw MNE object
@@ -295,13 +324,104 @@ class UnifiedEEGPreprocessor:
         if not bad_channels:
             return raw
         
-        self.log(f"Interpolating {len(bad_channels)} bad channels...")
+        # SAFETY CHECK: Don't interpolate >15% of channels
+        n_channels = len(raw.ch_names)
+        bad_pct = (len(bad_channels) / n_channels) * 100
+        max_bad_pct = 15.0
+        
+        self.log(f"Found {len(bad_channels)} bad channels ({bad_pct:.1f}%)")
+        
+        if bad_pct > max_bad_pct:
+            self.log(f"⚠️  WARNING: {bad_pct:.1f}% bad channels exceeds {max_bad_pct}% threshold!")
+            self.log(f"   Recording quality is too poor for reliable interpolation")
+            self.log(f"   SKIPPING interpolation - keeping original data")
+            self.log(f"   ⚠️  In production, this recording should be REJECTED")
+            return raw  # Return original data without interpolation
         
         raw_interp = raw.copy()
-        raw_interp.info['bads'] = bad_channels
-        raw_interp = raw_interp.interpolate_bads(reset_bads=True, verbose=False)
         
-        self.log(f"✓ Interpolated bad channels")
+        # Try multiple montages in order of preference
+        montage_names = ['standard_1020', 'biosemi64', 'biosemi128', 'biosemi256', 'easycap-M1']
+        montage_set = False
+        
+        for montage_name in montage_names:
+            try:
+                self.log(f"Trying montage: {montage_name}")
+                montage = mne.channels.make_standard_montage(montage_name)
+                
+                # Check how many channels match this montage
+                montage_ch_lower = [ch.lower() for ch in montage.ch_names]
+                raw_ch_lower = [ch.lower() for ch in raw_interp.ch_names]
+                
+                matches = sum(1 for ch in raw_ch_lower if ch in montage_ch_lower)
+                match_pct = (matches / len(raw_ch_lower)) * 100 if raw_ch_lower else 0
+                
+                self.log(f"  {matches}/{len(raw_ch_lower)} channels match ({match_pct:.1f}%)")
+                
+                # If >50% of channels match, try to use this montage
+                if match_pct > 50:
+                    raw_interp.set_montage(montage, match_case=False, on_missing='ignore', verbose=False)
+                    
+                    # Verify digitization was set
+                    if raw_interp.info['dig'] is not None:
+                        self.log(f"✓ Successfully set montage: {montage_name}")
+                        montage_set = True
+                        break
+                    else:
+                        self.log(f"  Digitization not set with {montage_name}, trying next...")
+                        
+            except Exception as e:
+                self.log(f"  Failed to load {montage_name}: {str(e)[:50]}")
+                continue
+        
+        # If no montage worked, skip interpolation
+        if not montage_set:
+            self.log(f"⚠️  Could not set any standard montage (digitization failed)")
+            self.log(f"   Skipping interpolation - keeping original data")
+            self.log(f"   Note: Channels preserved for CNN input consistency")
+            self.log(f"   This often happens with non-standard electrode layouts")
+            return raw
+        
+        # Check which bad channels have positions
+        channels_with_positions = []
+        channels_without_positions = []
+        
+        # Get channels that have digitization points
+        chs_with_pos = [ch['ch_name'] for ch in raw_interp.info['chs'] 
+                       if ch.get('loc') is not None and not all(loc == 0 for loc in ch['loc'][:3])]
+        
+        for ch in bad_channels:
+            if ch in chs_with_pos:
+                channels_with_positions.append(ch)
+            else:
+                channels_without_positions.append(ch)
+        
+        # Interpolate channels with positions
+        if channels_with_positions:
+            self.log(f"Interpolating {len(channels_with_positions)} bad channels...")
+            raw_interp.info['bads'] = channels_with_positions
+            
+            try:
+                raw_interp = raw_interp.interpolate_bads(reset_bads=True, verbose=False)
+                self.log(f"✓ Successfully interpolated {len(channels_with_positions)} channels")
+                
+                # Verify no NaN values
+                data_check = raw_interp.get_data(picks=channels_with_positions)
+                if np.any(np.isnan(data_check)):
+                    self.log(f"⚠️  Warning: NaN values detected after interpolation")
+                    return raw  # Return original if interpolation created NaNs
+                    
+            except Exception as e:
+                self.log(f"⚠️  Interpolation failed: {str(e)[:100]}")
+                self.log(f"   Returning original data without interpolation")
+                return raw
+        else:
+            self.log(f"⚠️  No bad channels have known positions for interpolation")
+        
+        if channels_without_positions:
+            self.log(f"⚠️  {len(channels_without_positions)} channels lack positions: {channels_without_positions}")
+            self.log(f"   These channels kept without interpolation for CNN consistency")
+        
         return raw_interp
     
     def apply_reference(self, raw: mne.io.Raw) -> mne.io.Raw:

@@ -1,6 +1,7 @@
 # Dataset folder
 Dataset/
 EEG_MPILMBB_LEMON/
+data/
 
 # Python virtual environment
 venv/
