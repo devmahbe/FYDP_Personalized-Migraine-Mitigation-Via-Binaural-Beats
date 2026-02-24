@@ -1,0 +1,71 @@
+
+TRANSFER LEARNING MODEL TRAINING SUMMARY
+======================================================================
+
+DATE: 2026-02-22 17:14:00
+
+DATASET INFORMATION
+----------------------------------------------------------------------
+LEMON (Pretraining):
+  - Subjects: 207
+  - Windows: 88,444
+  - Purpose: Unsupervised pretraining (healthy EEG patterns)
+
+Migraine (Fine-tuning):
+  - Subjects: 30
+  - Windows: 5,772
+  - Control: 3,184 windows
+  - Migraine: 2,588 windows
+
+MODEL ARCHITECTURE
+----------------------------------------------------------------------
+Model: EEGNet (Lawhern et al., 2018)
+Parameters: 3,090
+Input Shape: (62 channels, 1000 timepoints)
+Output: Binary classification (Control vs Migraine)
+
+TRAINING CONFIGURATION
+----------------------------------------------------------------------
+Cross-Validation: 5-fold subject-wise stratified
+Epochs: 50 (with early stopping, patience=15)
+Batch Size: 64
+Learning Rate: 0.0001
+Optimizer: Adam
+Loss Function: Cross-Entropy (class-weighted)
+Device: cuda
+
+CROSS-VALIDATION RESULTS
+----------------------------------------------------------------------
+Accuracy:  0.4668 ± 0.1555
+Precision: 0.3677 ± 0.2042
+Recall:    0.3791 ± 0.2672
+F1-Score:  0.3444 ± 0.2129
+AUC-ROC:   0.4623 ± 0.2646
+
+AGGREGATED CONFUSION MATRIX
+----------------------------------------------------------------------
+[[1689 1495]
+ [1703  885]]
+
+                Predicted
+              Control  Migraine
+True Control     1689     1495
+     Migraine    1703      885
+
+SAVED MODELS
+----------------------------------------------------------------------
+  - models\eegnet_fold1.pth
+  - models\eegnet_fold2.pth
+  - models\eegnet_fold3.pth
+  - models\eegnet_fold4.pth
+  - models\eegnet_fold5.pth
+
+REFERENCES
+----------------------------------------------------------------------
+1. Lawhern et al. (2018) - EEGNet architecture
+2. Schirrmeister et al. (2017) - Deep learning for EEG
+3. Kostas et al. (2021) - Self-supervised EEG learning
+4. Pan & Yang (2010) - Transfer learning survey
+5. Varoquaux & Cheplygina (2022) - Medical ML best practices
+
+======================================================================

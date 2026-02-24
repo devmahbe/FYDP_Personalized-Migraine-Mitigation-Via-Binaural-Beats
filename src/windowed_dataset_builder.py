@@ -192,7 +192,8 @@ class WindowedDatasetBuilder:
             )
         
         # Get epoch data: (n_epochs, n_channels, n_samples)
-        data = epochs.get_data()
+        # Use float32 to reduce memory usage by 50%
+        data = epochs.get_data().astype(np.float32)
         
         # Normalize per subject
         if self.normalize_per_subject:

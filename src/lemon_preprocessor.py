@@ -494,12 +494,22 @@ class UnifiedEEGPreprocessor:
                     )
                     eog_indices.extend(eog_indices_ch)
         
-        # Remove duplicates
-        eog_indices = list(set(eog_indices))
+        # Find muscle artifacts (high-frequency components)
+        # Critical for migraine patients who have elevated muscle tension
+        muscle_indices, muscle_scores = ica.find_bads_muscle(
+            raw,
+            threshold=0.5,  # Lower threshold = more aggressive removal
+            verbose=False
+        )
         
-        if eog_indices:
-            self.log(f"  Found {len(eog_indices)} artifact components: {eog_indices}")
-            ica.exclude = eog_indices
+        # Combine artifact indices
+        artifact_indices = list(set(eog_indices + muscle_indices))
+        
+        if artifact_indices:
+            self.log(f"  Found {len(artifact_indices)} artifact components:")
+            self.log(f"    - EOG: {len(eog_indices)}")
+            self.log(f"    - Muscle/EMG: {len(muscle_indices)}")
+            ica.exclude = artifact_indices
         else:
             self.log(f"  No clear artifact components found")
         
