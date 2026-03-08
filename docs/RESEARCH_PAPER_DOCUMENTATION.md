@@ -26,8 +26,9 @@ Migraine is a debilitating neurological disorder affecting approximately 15% of 
    - 3.1 System Overview
    - 3.2 Detailed Methodology and Design
    - 3.3 Project Plan
-   - 3.4 Implementation Details
-   - 3.5 Summary
+   - 3.4 Task Allocation
+   - 3.5 Implementation Details
+   - 3.6 Summary
 4. Results and Evaluation
 5. Standards and Design Constraints
    - 5.1 Compliance with Standards
@@ -300,7 +301,8 @@ The complete system architecture follows a modular pipeline design with five pri
          | P(migraine | EEG)        |
          |          |               |
          | Adaptive Freq Controller |
-         | tanh control law         |
+         | Weighted EEG + Clinical  |
+         | feedback control law     |
          |          |               |
          | Binaural Beat Generator  |
          | Left + Right pure tones  |
@@ -623,10 +625,11 @@ To prevent data leakage — a critical concern in EEG research where windows fro
 
 #### 3.2.6 Adaptive Treatment System — Core Innovation
 
-The adaptive treatment system is the project's primary engineering contribution. It implements a discrete-time closed-loop feedback controller where:
+The adaptive treatment system is the project's primary engineering contribution. It implements a **dual-signal closed-loop feedback controller with online weight learning**, where:
 
-- **State observer** = EEGNet classifier (outputs migraine probability)
-- **Actuator** = Binaural beat generator (adjusts stimulus frequency)
+- **State observer** = EEG band power extraction across five frequency bands (delta, theta, alpha, beta, gamma)
+- **Actuator** = Binaural beat generator (adjusts stimulus frequency in real time)
+- **Feedback signals** = (1) objective EEG band power changes + (2) subjective patient-reported clinical score
 
 **Binaural Beat Frequency Formula [15]:**
 
@@ -650,107 +653,339 @@ Carrier frequency:  f_0  =  (f_L + f_R) / 2   (100-400 Hz, for audibility)
 | Beta  | 13 - 30 Hz | Active cognition — AVOID in migraine   |  [2] |
 | Gamma | 30 - 100Hz | Cortical binding — experimental        | [11] |
 
-**Adaptive Control Law:**
+**Target EEG Power Distribution (Therapeutic Goal):**
 
-The controller updates the beat frequency every 4 seconds (one EEG window) using the output migraine probability p_hat(t):
+| Band    | Target Power | Therapeutic Rationale                         |
+|---------|--------------|-----------------------------------------------|
+| Delta   | 15%          | Low — avoid excessive drowsiness              |
+| Theta   | 20%          | Moderate — promote relaxation                 |
+| Alpha   | 40%          | **HIGH — primary therapeutic target**         |
+| Beta    | 20%          | Moderate — maintain calm alertness            |
+| Gamma   | 5%           | Low — reduce cortical hyperexcitability       |
+
+##### Adaptive Control Law — Mathematical Formulation
+
+The controller operates on a 20-minute treatment session with updates every 60 seconds (20 total control steps). Two coupled equations govern the system:
+
+**Equation 1 — Frequency Update:**
+
+$$f_b(t+\Delta t) = f_b(t) + \alpha \cdot \left(\sum_{k} w_k(t) \cdot \Delta P_k(t)\right) + \beta \cdot E(t)$$
+
+With hard constraint:
+
+$$f_b(t+\Delta t) = \text{clip}\big(f_b(t+\Delta t),\ f_{\min} = 4\ \text{Hz},\ f_{\max} = 13\ \text{Hz}\big)$$
+
+**Equation 2 — Weight Update (Online Learning):**
+
+$$w_k(t+\Delta t) = w_k(t) + \eta \cdot \big(P_{k,\text{target}} - P_{k,\text{observed}}(t)\big)$$
+
+With constraint:
+
+$$w_k \in [0.1,\ 2.0]$$
+
+**Symbol Definitions — Frequency Update:**
+
+| Symbol          | Name                          | Default Value | Description                                                                 |
+|-----------------|-------------------------------|---------------|-----------------------------------------------------------------------------|
+| $f_b(t)$        | Beat frequency at time $t$    | —             | Current binaural beat frequency in Hz                                       |
+| $f_b(t+\Delta t)$ | Updated beat frequency     | —             | Frequency after one control step                                            |
+| $\alpha$        | EEG feedback learning rate    | 0.05          | Controls how strongly EEG band power changes affect frequency               |
+| $\beta$         | Clinical feedback weight      | 0.10          | Controls how strongly patient feedback affects frequency                    |
+| $w_k(t)$        | Weight for band $k$ at time $t$ | varies     | Adaptive weight reflecting importance of each EEG band                      |
+| $\Delta P_k(t)$ | Band power change             | —             | Change in normalized power for band $k$: $P_k(t+\Delta t) - P_k(t)$       |
+| $E(t)$          | Clinical feedback score       | $\in [-1, +1]$ | Patient's subjective improvement rating at time $t$                       |
+| $k$             | Band index                    | —             | Iterates over: delta, theta, alpha, beta, gamma                             |
+| $f_{\min}$      | Minimum frequency             | 4 Hz          | Lower bound (theta range)                                                   |
+| $f_{\max}$      | Maximum frequency             | 13 Hz         | Upper bound (top of alpha range)                                            |
+
+**Symbol Definitions — Weight Update:**
+
+| Symbol               | Name                          | Default Value | Description                                                          |
+|----------------------|-------------------------------|---------------|----------------------------------------------------------------------|
+| $\eta$               | Weight learning rate          | 0.03          | Controls how fast weights adapt to errors                            |
+| $P_{k,\text{target}}$ | Target power for band $k$   | varies        | Desired normalized power ratio (therapeutic goal)                    |
+| $P_{k,\text{observed}}(t)$ | Observed power at time $t$ | —          | Measured normalized power ratio from EEG                             |
+
+##### How the Control Loop Works — Step by Step
+
+At each 60-second update interval, the system executes the following:
 
 ```
-f_bb(t+1)  =  f_bb(t)  -  alpha * tanh( beta * ( p_hat(t) - theta ) ) * delta_f_max
-
-Constraints:  f_bb(t+1)  =  clip( f_bb(t+1),  f_min=4 Hz,  f_max=13 Hz )
-
-Parameters:
-  alpha       = 0.1       (learning rate — controls adaptation speed)
-  beta        = 2.0       (sensitivity — sharpness of response)
-  theta       = 0.5       (clinical threshold — tunable per patient)
-  delta_f_max = 0.5 Hz    (max frequency step per update)
-  p_hat(t)    = migraine probability from EEGNet at time t
+1. Deliver binaural beat at current frequency f_b for 60 seconds
+2. Measure new EEG state (band powers via Welch PSD, normalized to sum = 1.0)
+3. Calculate band power changes:  ΔP_k(t) = P_k(t+Δt) - P_k(t)
+4. Collect clinical feedback score E(t) ∈ [-1, +1]
+5. Update weights using Equation 2 (online learning)
+6. Update frequency using Equation 1 (dual-signal controller)
+7. Clip frequency to [4, 13] Hz
+8. Repeat
 ```
 
-**How the formula works:**
+**Step 1 — Compute Band Power Changes:**
+
+$$\Delta P_k(t) = P_k(t + \Delta t) - P_k(t)$$
+
+A positive $\Delta P_k$ means the band's power increased; negative means it decreased. Using **changes** rather than absolute values makes the controller responsive to trends, insensitive to baseline differences between patients, and self-correcting when a band overshoots its target.
+
+**Step 2 — Compute Weighted EEG Signal:**
+
+$$\text{weighted\_eeg\_change} = \sum_{k \in \{\delta, \theta, \alpha, \beta, \gamma\}} w_k(t) \cdot \Delta P_k(t)$$
+
+The weights $w_k$ determine how much influence each band's change has on the frequency update. Bands that are further from their target receive higher weights (via Equation 2), so the controller allocates more attention to the most "off-target" bands.
+
+**Step 3 — Incorporate Clinical Feedback:**
+
+The clinical score $E(t) \in [-1, +1]$ represents the patient's subjective state:
+
+| Score Range   | Interpretation                                   |
+|---------------|--------------------------------------------------|
+| $E(t) < 0$   | Patient reports worsening (pain, discomfort)     |
+| $E(t) = 0$   | No change                                        |
+| $E(t) > 0$   | Patient reports improvement (pain relief)        |
+
+EEG alone cannot capture the full patient experience. Pain, comfort, and subjective improvement are clinically important outcomes that may not be fully reflected in band power ratios. The clinical term $\beta \cdot E(t)$ ensures the system respects the patient's experience alongside the objective EEG measurements. The clinical weight ($\beta = 0.10$) is intentionally set higher than the EEG weight ($\alpha = 0.05$) because patient comfort is the primary clinical objective.
+
+**Step 4 — Apply the Frequency Update (Equation 1):**
+
+$$f_b(t+\Delta t) = f_b(t) + \underbrace{\alpha \cdot \left(\sum_k w_k \cdot \Delta P_k\right)}_{\text{EEG-driven component}} + \underbrace{\beta \cdot E(t)}_{\text{Clinical component}}$$
+
+- **EEG component** ($\alpha = 0.05$): If the weighted sum is positive (bands moving favorably), frequency increases; if negative, it decreases.
+- **Clinical component** ($\beta = 0.10$): If the patient reports improvement ($E > 0$), frequency nudges up (reinforcing the current direction). If the patient reports worsening ($E < 0$), frequency nudges down.
+- Result is clipped to $[4, 13]$ Hz.
+
+**Step 5 — Update Weights (Equation 2):**
+
+$$w_k(t+\Delta t) = w_k(t) + \eta \cdot \big(P_{k,\text{target}} - P_{k,\text{observed}}(t)\big)$$
+
+- If $P_{k,\text{observed}} < P_{k,\text{target}}$: error is positive $\rightarrow$ weight **increases** $\rightarrow$ band gets more influence
+- If $P_{k,\text{observed}} > P_{k,\text{target}}$: error is negative $\rightarrow$ weight **decreases** $\rightarrow$ band gets less influence
+- Weights clipped to $[0.1, 2.0]$ to prevent any single band from dominating or being ignored
+
+##### Numerical Walkthrough
+
+**Example A: Early Treatment (Minute 2)**
 
 ```
-  p_hat(t) > theta  (migraine detected)
-      --> tanh term is POSITIVE
-      --> f_bb DECREASES  toward theta/delta range (4-8 Hz)
-      --> induces analgesic entrainment
+Given:
+  f_b(t) = 10.0 Hz,  α = 0.05,  β = 0.10,  η = 0.03
+  Current EEG:   delta=0.22, theta=0.18, alpha=0.28, beta=0.24, gamma=0.08
+  Previous EEG:  delta=0.23, theta=0.17, alpha=0.26, beta=0.25, gamma=0.09
+  Weights: w_delta=0.43, w_theta=0.52, w_alpha=0.62, w_beta=0.46, w_gamma=0.47
+  Clinical score: E(t) = -0.15  (early discomfort)
 
-  p_hat(t) < theta  (relaxed state)
-      --> tanh term is NEGATIVE
-      --> f_bb INCREASES  toward alpha range (8-13 Hz)
-      --> promotes relaxation without pain
+Step 1 — Band power changes:
+  ΔP_delta = 0.22 - 0.23 = -0.01
+  ΔP_theta = 0.18 - 0.17 = +0.01
+  ΔP_alpha = 0.28 - 0.26 = +0.02
+  ΔP_beta  = 0.24 - 0.25 = -0.01
+  ΔP_gamma = 0.08 - 0.09 = -0.01
 
-  tanh ensures the step is BOUNDED: never exceeds delta_f_max
+Step 2 — Weighted EEG change:
+  = (0.43 × -0.01) + (0.52 × 0.01) + (0.62 × 0.02) + (0.46 × -0.01) + (0.47 × -0.01)
+  = -0.0043 + 0.0052 + 0.0124 - 0.0046 - 0.0047
+  = +0.0040
+
+Step 3 — Frequency update:
+  f_b(t+Δt) = 10.0 + 0.05 × 0.0040 + 0.10 × (-0.15)
+            = 10.0 + 0.0002 - 0.015
+            = 9.9852 Hz
+
+→ Frequency decreases slightly (clinical discomfort outweighs small EEG improvement)
 ```
 
-**Per-Patient Personalization (Session-Level):**
-
-After each session, the sensitivity parameter beta is updated to personalize the controller:
+**Example B: Mid Treatment (Minute 8, Things Improving)**
 
 ```
-beta_(k+1)  =  beta_k  +  gamma * ( delta_p_bar_k / delta_f_k )
+Given:
+  f_b(t) = 10.05 Hz
+  Weights have adapted: w_alpha = 0.85 (high — alpha is most "needed")
+  ΔP_alpha = +0.03  (alpha rising nicely)
+  E(t) = +0.55  (patient reports clear improvement)
+  Weighted EEG change ≈ 0.85 × 0.03 + (small other terms) ≈ 0.026
 
-Where:  delta_p_bar_k  =  mean change in migraine probability during session k
-        delta_f_k      =  mean change in beat frequency during session k
-        gamma          =  meta-learning rate (default 0.05)
+  f_b(t+Δt) = 10.05 + 0.05 × 0.026 + 0.10 × 0.55
+            = 10.05 + 0.0013 + 0.055
+            = 10.106 Hz
+
+→ Frequency increases — reinforcing the therapeutic direction
 ```
 
-**Figure 3.7 — Real-Time Adaptive Feedback Controller**
+**Example C: Weight Update for Alpha Band**
 
 ```
-+--------------------------------------------------+
-|  REAL-TIME EEG STREAM                           |
-|  62 channels @ 250 Hz                           |
-+---------------------+----------------------------+
-                      |
-                      v
-+--------------------------------------------------+
-|  ONLINE PREPROCESSING                           |
-|  Bandpass 1-40 Hz  +  CAR  +  Z-Score          |
-+---------------------+----------------------------+
-                      |
-                      v
-+--------------------------------------------------+
-|  SLIDING WINDOW                                 |
-|  4s window extracted, stride 2s                 |
-+---------------------+----------------------------+
-                      |
-                      v
-+--------------------------------------------------+
-|  EEGNet CLASSIFIER  (pretrained weights)        |
-|  Input: 1 x 62 x 1000                          |
-|  Output: p_hat(t)  in [0, 1]                    |
-+---------------------+----------------------------+
-                      |
-                      v
-+--------------------------------------------------+
-|  ADAPTIVE FREQUENCY CONTROLLER                  |
-|  f_bb(t+1) = f_bb(t)                           |
-|            - alpha * tanh(beta*(p_hat - theta)) |
-|            * delta_f_max                        |
-|  clip result to [4 Hz, 13 Hz]                   |
-+---------------------+----------------------------+
-                      |
-                      v
-+--------------------------------------------------+
-|  BINAURAL BEAT GENERATOR                        |
-|  Left  tone: f_L  =  f0  +  f_bb / 2           |
-|  Right tone: f_R  =  f0  -  f_bb / 2           |
-|  Pure sine waves combined into stereo audio     |
-+---------------------+----------------------------+
-                      |
-                      v
-+--------------------------------------------------+
-|  PATIENT HEADPHONES                             |
-|  Audio plays -> frequency-following response    |
-|  Brain entrains to f_bb                         |
-+---------------------+----------------------------+
-                      |
-    (Updated EEG)     |
-          ^-----------+  (feedback loop closes here)
+Given:
+  w_alpha(t) = 0.62,  η = 0.03
+  P_alpha_target = 0.40,  P_alpha_observed = 0.28
+
+  w_alpha(t+Δt) = 0.62 + 0.03 × (0.40 - 0.28)
+                = 0.62 + 0.0036
+                = 0.6236
+
+→ Alpha weight increases because alpha is below target
+→ Future frequency updates will be more responsive to alpha changes
 ```
 
-**Figure 3.8 — Session State Machine**
+##### Weight Initialization
+
+Weights are not all set to the same starting value. They are initialized based on the patient's **baseline deviation** from the target state and **clinical profile**:
+
+**EEG Band Weights:**
+
+$$w_k(0) = 0.5 + \big(P_{k,\text{target}} - P_{k,\text{baseline}}\big)$$
+
+If a band is far below its target, $w_k(0) > 0.5$ (more attention). If it is above target, $w_k(0) < 0.5$.
+
+**Clinical Factor Weights (Static — do not change during the session):**
+
+| Factor        | Formula                                                    | Purpose                                    |
+|---------------|------------------------------------------------------------|--------------------------------------------|
+| $w_{\text{age}}$     | $1.0 - \frac{\text{age} - 20}{60}$, clipped to $[0.3, 1.0]$ | Younger patients respond more to entrainment |
+| $w_{\text{gender}}$  | 0.9 (Female) or 0.7 (Male)                               | Females have higher migraine prevalence     |
+| $w_{\text{migraine type}}$ | 1.2 (Aura) or 0.8 (Non-Aura)                      | Aura patients need more aggressive therapy  |
+
+##### Initial Frequency Selection
+
+The starting frequency before the loop begins is computed as:
+
+$$f_b(0) = f_{\text{base}} + \big(P_{\alpha,\text{target}} - P_{\alpha,\text{baseline}}\big) \times 5.0$$
+
+Where:
+- $f_{\text{base}} = 10.0$ Hz for **aura** migraine (target alpha band directly)
+- $f_{\text{base}} = 7.5$ Hz for **non-aura** migraine (theta-alpha transition)
+- The adjustment factor ($\times 5.0$) scales the alpha deficit into a Hz offset
+- Result is clipped to $[4, 13]$ Hz
+
+**Intuition:** If the patient has very low alpha power (large deficit), the starting frequency is pushed higher into the alpha range to stimulate it. If alpha is already reasonable, the frequency starts lower in the theta-alpha border.
+
+##### Convergence Behavior
+
+Over the 20-minute session, the system exhibits the following expected behavior:
+
+| Phase              | Minutes | What Happens                                                         |
+|--------------------|---------|----------------------------------------------------------------------|
+| **Initialization** | 0       | Frequency set based on migraine type + alpha deficit                 |
+| **Early**          | 1–3     | Small EEG changes; clinical discomfort ($E < 0$) may pull frequency down |
+| **Adaptation**     | 4–10    | Weights converge; alpha weight grows as alpha approaches target      |
+| **Convergence**    | 11–15   | Alpha power nears 40% target; frequency stabilizes                   |
+| **Plateau**        | 16–20   | System reaches near-equilibrium; small corrections only              |
+
+The weight learning rate $\eta = 0.03$ is intentionally small to ensure gradual, stable adaptation without oscillation.
+
+##### Design Rationale
+
+**Why use band power changes ($\Delta P_k$) instead of raw powers?**
+
+The controller reacts to **changes** rather than absolute values. This makes it responsive to trends (rising alpha $\rightarrow$ positive contribution $\rightarrow$ frequency reinforces the trend), insensitive to baseline differences between patients, and self-correcting (if a band overshoots its target, the change becomes negative and the system self-corrects).
+
+**Why online weight learning?**
+
+Static weights would treat all bands equally throughout the session. Online learning allows the controller to focus on what matters most (if alpha is far from target, $w_\alpha$ grows), de-emphasize achieved goals (if theta reaches its target, $w_\theta$ stabilizes), and personalize during the session (different patients respond differently; weights adapt to each patient's response pattern).
+
+**Why include clinical feedback?**
+
+EEG alone cannot capture the full patient experience. The clinical term $\beta \cdot E(t)$ ensures the system respects the patient's subjective comfort alongside the objective EEG measurements, making the therapy both physiologically grounded and patient-centered.
+
+**Figure 3.7 — Full Adaptive Control Loop**
+
+```
+┌──────────────────────────────────────┐
+│  Patient wearing EEG headset         │
+│  + stereo headphones                 │
+└──────────────┬───────────────────────┘
+               │  Raw EEG (62ch @ 250Hz)
+               ▼
+┌──────────────────────────────────────┐
+│  EEG Preprocessing                   │
+│  Bandpass 1-40Hz → CAR → Z-Score     │
+└──────────────┬───────────────────────┘
+               │  Clean EEG
+               ▼
+┌──────────────────────────────────────┐
+│  Band Power Extraction (Welch PSD)   │
+│  → δ, θ, α, β, γ proportions        │
+│  → Normalized to sum = 1.0           │
+└──────────────┬───────────────────────┘
+               │  P_k(t) for each band
+               ▼
+┌──────────────────────────────────────┐
+│  Compute ΔP_k = P_k(t) - P_k(t-1)  │
+└──────────────┬───────────────────────┘
+               │                          ┌─────────────────────┐
+               │                          │  Patient Feedback    │
+               │                          │  E(t) ∈ [-1, +1]    │
+               │                          └──────────┬──────────┘
+               ▼                                     │
+┌──────────────────────────────────────────────────────┐
+│  Adaptive Frequency Controller                       │
+│                                                      │
+│  f_b(t+Δt) = f_b(t) + α·Σ(w_k·ΔP_k) + β·E(t)     │
+│                                                      │
+│  clip to [4 Hz, 13 Hz]                              │
+└──────────────┬───────────────────────────────────────┘
+               │
+               ├──────────────────────────────────────┐
+               │                                      ▼
+               │              ┌────────────────────────────────────┐
+               │              │  Online Weight Update              │
+               │              │  w_k += η·(P_target - P_observed)  │
+               │              │  clip to [0.1, 2.0]               │
+               │              └────────────────────────────────────┘
+               │
+               ▼
+┌──────────────────────────────────────┐
+│  Binaural Beat Generator             │
+│  Left  ear: f₀ + f_b/2              │
+│  Right ear: f₀ − f_b/2              │
+└──────────────┬───────────────────────┘
+               │  Stereo audio
+               ▼
+┌──────────────────────────────────────┐
+│  Patient Headphones                  │
+│  → Frequency-following response      │
+│  → Brain entrains to f_b            │
+└──────────────┬───────────────────────┘
+               │  Changed brain state
+               └──── feedback loop closes ──► back to EEG measurement
+```
+
+**Figure 3.8 — Dual-Signal Controller Architecture**
+
+```
+                    ┌──────────────────────────────┐
+  EEG Headset ───→  │  Band Power Extraction       │
+                    │  δ, θ, α, β, γ proportions   │
+                    └──────────┬───────────────────┘
+                               │  ΔP_k(t) for each band
+                               ▼
+                    ┌──────────────────────────────┐
+                    │  Weighted Sum                 │
+                    │  Σ w_k · ΔP_k                │
+                    │  (× α = 0.05)                │
+                    └──────────┬───────────────────┘
+                               │
+                               │   ← Added together
+                               │
+                    ┌──────────┴───────────────────┐
+                    │  Clinical Feedback            │
+  Patient ────────→ │  E(t) ∈ [-1, +1]             │
+                    │  (× β = 0.10)                │
+                    └──────────┬───────────────────┘
+                               │
+                               ▼
+                    ┌──────────────────────────────┐
+                    │  f_b(t+Δt) = f_b(t) + sum    │
+                    │  clip to [4, 13] Hz          │
+                    └──────────┬───────────────────┘
+                               │
+                               ▼
+                    ┌──────────────────────────────┐
+                    │  Binaural Beat Generator     │
+                    │  Left:  f₀ + f_b/2           │
+                    │  Right: f₀ - f_b/2           │
+                    └──────────────────────────────┘
+```
+
+**Figure 3.9 — Session State Machine**
 
 ```
 [SYSTEM START]
@@ -760,50 +995,51 @@ Where:  delta_p_bar_k  =  mean change in migraine probability during session k
       |  EEG device connected
       v
   [MONITORING]  <-----------------------------+
-      |  4s window ready                      |
+      |  60s interval elapsed                 |
       v                                       |
-  [CLASSIFYING]                               |
-      |                                       |
-      +--- p_hat >= 0.5 -------> [MIGRAINE STATE]
-      |                               |
-      +--- p_hat < 0.5  -------> [NORMAL STATE]
-                                      |
-  [MIGRAINE STATE]                    |
-      |  Generate Theta/Delta Beats   |
-      |  f_bb in range 4-8 Hz         |
-      +-----> continue monitoring ----+
-                                      |
-  [NORMAL STATE]                      |
-      |  Generate Alpha Beats         |
-      |  f_bb in range 8-13 Hz        |
-      +-----> continue monitoring ----+
+  [BAND POWER EXTRACTION]                    |
+      |  Compute P_k(t) and ΔP_k(t)          |
+      v                                       |
+  [WEIGHT UPDATE]                             |
+      |  w_k += η·(P_target - P_observed)     |
+      v                                       |
+  [FREQUENCY UPDATE]                          |
+      |  f_b += α·Σ(w_k·ΔP_k) + β·E(t)      |
+      |  clip to [4, 13] Hz                   |
+      v                                       |
+  [BINAURAL BEAT GENERATION]                  |
+      |  Left: f₀ + f_b/2                    |
+      |  Right: f₀ − f_b/2                   |
+      +-----> continue monitoring ────────────+
 
-  After 30 minutes:
-  [SESSION END] --> update beta --> save patient profile --> [IDLE]
+  After 20 minutes:
+  [SESSION END] --> save patient profile --> [IDLE]
 ```
 
 ### 3.3 Project Plan
 
-**Figure 3.9 — Phase I Timeline**
+The project is structured around a six-phase development lifecycle that spans the entire Final Year Design Project duration across both semesters. Phase 1 (Weeks 1–6) established the theoretical foundation and literature mastery — encompassing migraine pathophysiology, EEG-based biomarker identification, wearable EEG acquisition technologies, binaural beat auditory stimulation mechanisms, and the identification of the core research gap: no prior work integrates wearable EEG recording, deep learning–based classification, adaptive binaural beat therapy, and real-time closed-loop control within a single cohesive framework. Phase 2 (Weeks 7–14) concentrated on experimental design, dataset planning, and ethical review — including finalization of the research questions and methodological framework, dataset curation strategy (LEMON for encoder pretraining, Chamanzar et al. migraine dataset for supervised classification), and clinical trial protocol development covering participant eligibility criteria, experimental session structure, session duration rationale, and selection of validated outcome instruments (VAS, HIT-6, STAI). Phase 3 (Weeks 15–28), which represents the current stage of work, covers end-to-end model development and closed-loop system construction — spanning EEG preprocessing pipeline engineering, spectral and spatial feature extraction, EEGNet classifier architecture design, two-stage transfer learning training, stratified cross-validation performance benchmarking, binaural beat waveform generator implementation, and dual-signal adaptive feedback controller design. Phase 4 (FYDP-II, Weeks 1–6) will carry out pilot-scale EEG data acquisition using consumer-grade wearable headbands, real-time closed-loop therapy delivery, and multi-modal outcome measurement collection. Phase 5 (FYDP-II, Weeks 7–11) will perform rigorous statistical evaluation, result interpretation, publication-quality figure generation, and full manuscript preparation, while Phase 6 (FYDP-II, Weeks 12–14) targets submission to a Q1-ranked journal or peer-reviewed conference, reviewer response preparation, and final publication.
+
+**Figure 3.10 — Phase I Timeline**
 
 ```
-TASK                             |SEP|OCT|NOV|DEC|JAN|FEB|MAR|APR|
----------------------------------+---+---+---+---+---+---+---+---+
-LEMON Dataset Acquisition        |===|   |   |   |   |   |   |   |
-Migraine Dataset Acquisition     |===|===|   |   |   |   |   |   |
-Preprocessing Pipeline Dev       |   |===|===|   |   |   |   |   |
-Windowing & Dataset Builder      |   |   |===|   |   |   |   |   |
-EEGNet Architecture Design       |   |   |===|===|   |   |   |   |
-Transfer Learning Training       |   |   |   |===|===|===|   |   |  <-- active
-Cross-Validation & Evaluation    |   |   |   |   |===|===|===|   |  <-- active
-Binaural Beat Generator          |   |   |   |===|   |   |   |   |
-Adaptive Controller Design       |   |   |   |   |===|===|===|   |  <-- active
-Simulation & Testing             |   |   |   |   |   |   |===|===|
-Phase I Report                   |   |   |   |   |   |===|===|===|  <-- active
-Presentation Preparation         |   |   |   |   |   |   |   |===|
+TASK                             |W1-2|W3-4|W5-6|W7-8|W9-10|W11-12|W13-14|W15-16|
+---------------------------------+----+----+----+----+-----+------+------+------+
+LEMON Dataset Acquisition        |====|    |    |    |     |      |      |      |
+Migraine Dataset Acquisition     |====|====|    |    |     |      |      |      |
+Preprocessing Pipeline Dev       |    |====|====|    |     |      |      |      |
+Windowing & Dataset Builder      |    |    |====|    |     |      |      |      |
+EEGNet Architecture Design       |    |    |====|====|     |      |      |      |
+Transfer Learning Training       |    |    |    |====|=====|======|      |      |  <-- active
+Cross-Validation & Evaluation    |    |    |    |    |=====|======|======|      |  <-- active
+Binaural Beat Generator          |    |    |    |====|     |      |      |      |
+Adaptive Controller Design       |    |    |    |    |=====|======|======|      |  <-- active
+Simulation & Testing             |    |    |    |    |     |      |======|======|
+Phase I Report                   |    |    |    |    |     |======|======|======|  <-- active
+Presentation Preparation         |    |    |    |    |     |      |      |======|
 ```
 
-**Figure 3.10 — Deliverable Dependency Map**
+**Figure 3.11 — Deliverable Dependency Map**
 
 ```
 [Notebook 01: LEMON Preprocessing]     STATUS: COMPLETE
@@ -826,7 +1062,11 @@ Presentation Preparation         |   |   |   |   |   |   |   |===|
                                STATUS: PENDING
 ```
 
-### 3.4 Implementation Details
+### 3.4 Task Allocation
+
+The project workload is distributed across five specialized roles to ensure parallel progress and domain expertise across all system components. Jarin serves as the Principal Research Lead, responsible for research framing, novelty positioning, journal alignment, final architectural decisions, and paper writing — including the master system roadmap that integrates all subsystem diagrams into a unified offline-to-online pipeline narrative. Anisa leads EEG and Signal Processing (Block 1), owning the preprocessing pipeline design (bandpass filtering, notch filtering, artifact removal, segmentation), feature extraction (alpha power, beta power, gamma power, alpha asymmetry, entropy), and the mapping of migraine pathophysiological mechanisms (cortical hyperexcitability, thalamocortical dysrhythmia, sensory overload) to measurable EEG biomarker changes. Mashrafe leads ML and AI (Block 2), responsible for public dataset discovery and evaluation, model selection and training (EEGNet, SVM, CNN-LSTM baselines), performance evaluation (accuracy, F1, ROC-AUC, confusion matrices), and defining the two-stage pipeline from offline training on public data to online inference on real-time EEG. Prince leads System and Application Design (Block 3), handling wearable EEG integration feasibility (comparing consumer devices such as Muse 2 against clinical-grade systems), closed-loop decision logic (mapping detected brain states to appropriate binaural beat frequency bands), and end-to-end system architecture from EEG acquisition through audio output. Mahbe leads Clinical and Evaluation Design (Block 4), defining the experimental protocol (baseline, stress induction, therapy, post-therapy rest, questionnaire), session timing justification based on clinical literature supporting 15–30 minute auditory neuromodulation efficacy, validated outcome instruments (Visual Analog Scale for pain, HIT-6 for migraine impact, STAI for anxiety), and safety considerations including volume limits, non-invasiveness, and participant withdrawal provisions.
+
+### 3.5 Implementation Details
 
 **Software Stack:**
 
@@ -861,13 +1101,16 @@ Presentation Preparation         |   |   |   |   |   |   |   |===|
 | Max Epochs             | 50          | Upper bound per fold             |
 | CV Folds               | 5           | Standard for small datasets [1]  |
 | Pretraining Epochs     | 10          | Sufficient for convergence [8]   |
-| Adaptive alpha         | 0.1         | Conservative adaptation          |
-| Adaptive beta          | 2.0         | Moderate sensitivity             |
-| Adaptive delta_f_max   | 0.5 Hz      | Smooth frequency transitions     |
+| Adaptive α (EEG rate)  | 0.05        | Conservative EEG feedback rate   |
+| Adaptive β (Clinical)  | 0.10        | Clinical feedback weight         |
+| Adaptive η (Weight LR) | 0.03        | Gradual weight adaptation        |
+| Frequency bounds       | [4, 13] Hz  | Theta-alpha therapeutic range    |
+| Weight bounds          | [0.1, 2.0]  | Prevent band dominance/neglect   |
+| Update interval        | 60 s        | One control step per minute      |
 
-### 3.5 Summary
+### 3.6 Summary
 
-This chapter has presented a comprehensive technical design of a closed-loop EEG-guided binaural beat therapy system for migraine mitigation. The design spans four interconnected subsystems: a rigorous MNE-based preprocessing pipeline [5], a memory-efficient windowed dataset builder [19], a two-stage transfer learning model (EEGNet autoencoder [8] + classifier [13]), and a novel adaptive feedback controller governed by the tanh control law. The adaptive controller is the project's central contribution, representing a mathematically principled approach to real-time neural state estimation and therapeutic stimulation that has not previously been reported in the binaural beat literature [15]. The subject-wise cross-validation protocol [1] and class-weighted loss function ensure that reported performance metrics are clinically meaningful and resistant to the data leakage artifacts that have historically inflated EEG classification benchmarks [18].
+This chapter has presented the complete technical design, project plan, and team organization for a closed-loop EEG-guided binaural beat therapy system for personalized migraine mitigation. The design encompasses five tightly integrated subsystems — a rigorous MNE-based EEG preprocessing pipeline [5], a memory-efficient windowed dataset builder [19], a two-stage transfer learning model combining an EEGNet-based autoencoder [8] pretrained on 213 LEMON subjects with a supervised classifier [13] fine-tuned on 31 migraine subjects, a parametric binaural beat generator [15], and a novel dual-signal adaptive feedback controller with online weight learning that combines objective EEG band power feedback ($\alpha = 0.05$) with subjective patient-reported clinical scores ($\beta = 0.10$) to continuously steer brainwave activity toward therapeutic targets (primarily 40% alpha power). The six-phase project plan spans from initial literature review and theory building through model development and closed-loop implementation in FYDP-I, to pilot data collection, therapy execution, statistical analysis, and Q1 journal submission in FYDP-II. Task allocation distributes domain expertise across five specialized roles — research leadership, EEG signal processing, ML/AI model development, system and application design, and clinical evaluation — ensuring parallel progress and comprehensive coverage of the multidisciplinary challenges inherent in building a real-time adaptive neuromodulation system. The subject-wise cross-validation protocol [1] and class-weighted loss function ensure that all reported performance metrics are clinically meaningful and resistant to the data leakage artifacts that have historically inflated EEG classification benchmarks [18].
 
 ---
 
