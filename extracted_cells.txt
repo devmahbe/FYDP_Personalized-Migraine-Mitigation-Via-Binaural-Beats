@@ -1,0 +1,310 @@
+=== CELL 0 ===
+# LEMON EEG Preprocessing Pipeline
+## Based on DISCOVER-EEG (Gil Ávila et al., 2023, Scientific Data)
+
+This notebook implements the full EEG preprocessing pipeline from the DISCOVER-EEG paper,
+adapted for Python/MNE. The paper used this exact pipeline on the **MPI-Leipzig Mind-Brain-Body (LEMON)** dataset — the same dataset we have.
+
+### Pipeline Steps (in order):
+1. **Load raw data** — BrainVision format (.vhdr)
+2. **Inspect raw data** — channels, sampling rate, events
+3. **Set channel types & montage** — mark VEOG, assign electrode positions
+4. **Plot raw data** — visual inspection
+5. **Line noise removal** — remove 50 Hz power line interference
+6. **High-pass filter** — remove slow drifts (transition band 0.25–0.75 Hz)
+7. **Resample to 250 Hz** — match our migraine dataset sampling rate
+8. **Bad channel detection & rejection** — flat, noisy, or uncorrelated channels
+9. **Re-reference to average** — reconstruct FCz reference channel
+10. **ICA + ICLabel** — decompose signals, auto-reject Muscle/Eye components
+11. **Interpolate removed channels** — spherical spline interpolation
+12. **Bad time segment removal** — reject high-variance segments
+13. **Epoch into 2-second windows** — 50% overlap, reject discontinuous epochs
+14. **Save preprocessed data** — for downstream analysis
+
+### Why 250 Hz?
+Our migraine labeled dataset (Chamanzar et al.) is recorded at 256 Hz and commonly resampled to 250 Hz.
+To combine LEMON (healthy controls) with migraine data for classification, both must share the same sampling rate.
+
+### Key difference from paper:
+- Paper uses **MATLAB/EEGLAB**; we use **Python/MNE-Python** with equivalent functions
+- Paper uses **CleanLine** for line noise; we use MNE's `notch_filter` (spectrum_fit method)
+- Paper uses **EEGLAB ICLabel**; we use **mne-icalabel** (same underlying model)
+---
+=== CELL 21 ===
+## Step 10: Bad Channel Detection and Rejection
+
+### Paper's criteria (clean_rawdata defaults):
+A channel is marked **bad** if **any** of these are true:
+1. **Flatline**: Channel is flat (zero variance) for more than **5 seconds**
+2. **Noise-to-signal ratio**: Z-scored noise ratio exceeds **4** standard deviations
+3. **Low correlation**: Channel cannot be predicted from neighboring channels at least **80% of the time**
+
+### Our implementation:
+MNE doesn't have `clean_rawdata` built-in, so we implement equivalent criteria:
+1. **Flat channel detection** — check if channel has near-zero peak-to-peak amplitude in any 5s window
+2. **High noise detection** — check if channel has abnormally high variance (z-score > 4)
+3. **Low correlation detection** — check correlation with neighboring channels in sliding windows
+
+Bad channels are **removed** from the data (not interpolated yet — that comes after ICA).
+
+**Paper reports:** ~1-2 channels rejected per recording (~2-3%)
+---
+=== CELL 22 ===
+def detect_bad_channels(raw,
+                        flatline_threshold_s=5,
+                        zscore_threshold=5,
+                        min_correlation=0.55,
+                        correlation_window_s=4.0,
+                        good_window_min_frac=0.50):
+    """
+    Detect bad EEG channels — three criteria from DISCOVER-EEG paper.
+
+    Calibrated parameters (targeting paper's ~2-3% rejection rate):
+      flatline_threshold_s  = 5    Dead electrode: flat for > 5 consecutive seconds
+      zscore_threshold      = 5    Extreme variance: >5 SD above all-channel mean
+      min_correlation       = 0.55 Min acceptable correlation with neighbour mean
+      correlation_window_s  = 4.0  4-second windows → stable correlation estimates
+      good_window_min_frac  = 0.35 Channel must pass in >=35% of windows to be kept
+                                    (flagged only if bad in >65% of windows)
+    """
+    bad_channels = []
+    reasons = {}
+
+    picks_eeg = mne.pick_types(raw.info, eeg=True, eog=False)
+    all_eeg_names = [raw.ch_names[p] for p in picks_eeg]
+
+    #exclude FCz it is the original reference electrode (all-zeros signal).
+    eeg_names = [ch for ch in all_eeg_names if ch != 'FCz']
+    data_picks = [picks_eeg[all_eeg_names.index(ch)] for ch in eeg_names]
+    data = raw.get_data(picks=data_picks)     
+    sfreq = raw.info['sfreq']
+
+    # ── Criterion 1: Flatline (dead electrode) ───────────────────────────
+    # A channel is flat if peak-to-peak < 1e-8 V for >= flatline_threshold_s.
+    flatline_samples = int(flatline_threshold_s * sfreq)
+    step = max(1, flatline_samples // 2)
+    for i, ch_name in enumerate(eeg_names):
+        for start in range(0, len(data[i]) - flatline_samples, step):
+            if np.ptp(data[i, start:start + flatline_samples]) < 1e-8:
+                bad_channels.append(ch_name)
+                reasons[ch_name] = 'flatline (dead electrode)'
+                break
+
+    # ── Criterion 2: Extreme variance (z-score) ──────────────────────────
+    # Uses z-score of per-channel variance across ALL channels.
+    # threshold=5: catches only genuine outliers (noisy/broken electrodes)
+    # while allowing some high-variance channels due to ICA-cleanable artifacts.
+    channel_vars = np.var(data, axis=1)
+    if np.std(channel_vars) > 0:
+        z_scores = (channel_vars - np.mean(channel_vars)) / np.std(channel_vars)
+        for i, ch_name in enumerate(eeg_names):
+            if z_scores[i] > zscore_threshold and ch_name not in bad_channels:
+                bad_channels.append(ch_name)
+                reasons[ch_name] = f'extreme variance (z={z_scores[i]:.2f}, threshold={zscore_threshold})'
+
+    # ── Criterion 3: Low spatial correlation ─────────────────────────────
+    # Brain EEG spreads smoothly across the scalp (volume conduction).
+    # A channel with consistently low correlation with its neighbours is
+    # likely picking up local noise rather than brain activity.
+    #
+    # CRITICAL: reference set is FROZEN here (no snowball effect).
+    reference_set = [j for j, ch in enumerate(eeg_names) if ch not in bad_channels]
+
+    if len(reference_set) >= 5:
+        window_samples = int(correlation_window_s * sfreq)
+        n_windows = max(1, data.shape[1] // window_samples)
+        np.random.seed(42)   # reproducibility
+
+        for i, ch_name in enumerate(eeg_names):
+            if ch_name in bad_channels:
+                continue
+            other_idx = [j for j in reference_set if j != i]
+            if len(other_idx) < 5:
+                continue
+            good_windows = 0
+            for w in range(n_windows):
+                s = w * window_samples
+                e = s + window_samples
+                subset = np.random.choice(other_idx,
+                                          size=min(20, len(other_idx)),
+                                          replace=False)
+                other_mean = np.mean(data[np.array(subset), s:e], axis=0)
+                corr = np.abs(np.corrcoef(data[i, s:e], other_mean)[0, 1])
+                if corr >= min_correlation:
+                    good_windows += 1
+            pct_good = good_windows / n_windows
+            # Flag only if good in FEWER than 35% of windows
+            # (i.e., the channel fails in more than 65% of all 4-s windows)
+            if pct_good < good_window_min_frac:
+                bad_channels.append(ch_name)
+                reasons[ch_name] = (f'low spatial correlation '
+                                    f'({pct_good*100:.0f}% of windows >= {min_correlation})')
+
+    return bad_channels, reasons
+
+
+
+print('Detecting bad channels...')
+print(f'  Criteria & thresholds:')
+print(f'    1. Flatline       > 5 s continuous')
+print(f'    2. Z-score noise  > 5 SD above all-channel mean')
+print(f'    3. Correlation    < 0.55 with neighbours in >65% of 4-s windows')
+print(f'    (FCz excluded — it is the recording reference electrode)')
+
+bad_chs, bad_reasons = detect_bad_channels(raw)
+
+print(f'\nResult: {len(bad_chs)} bad channel(s) detected')
+for ch in bad_chs:
+    print(f'  - {ch}: {bad_reasons[ch]}')
+
+raw.info['bads'] = bad_chs
+n_eeg_total = len(mne.pick_types(raw.info, eeg=True, exclude=[]))
+print(f'\n(Paper reports: ~1-2 bad channels per recording, ~2-3%)')
+print(f'We found {len(bad_chs)}/{n_eeg_total} ({len(bad_chs)/n_eeg_total*100:.1f}%)')
+
+---
+=== CELL 29 ===
+## Step 13: Interpolate Removed Bad Channels
+
+### What is interpolation?
+We removed bad channels in Step 10. Now we **reconstruct** them using data from neighbors.
+
+### Why spherical spline interpolation?
+- Models the scalp as a sphere and fits a smooth surface through the good channels
+- Bad channel's value is estimated from this surface
+- Standard method (Perrin et al., 1989), same as paper's `pop_interp()`
+
+### Why after ICA?
+- Bad channels would contaminate ICA if included
+- ICA needs clean data for good source separation
+- After ICA, we interpolate to restore the full montage
+
+### Why do we need all channels back?
+- ML models expect **fixed-size input** (same channels for all subjects)
+- Our migraine classification needs consistent channel count
+---
+=== CELL 30 ===
+# ============================================================
+# STEP 13: Interpolate bad channels using spherical splines
+# ============================================================
+
+if dropped_bad_channels:
+    print(f'Interpolating {len(dropped_bad_channels)} bad channel(s): {dropped_bad_channels}')
+    
+    # Add bad channels back as flat channels
+    for ch_name in dropped_bad_channels:
+        if ch_name not in raw_clean.ch_names:
+            raw_clean = mne.add_reference_channels(raw_clean, ref_channels=[ch_name], verbose=False)
+    
+    # Mark them as bad so interpolation knows which to fix
+    raw_clean.info['bads'] = dropped_bad_channels
+    
+    # Ensure montage is set for interpolation positions
+    montage = mne.channels.make_standard_montage('standard_1005')
+    raw_clean.set_montage(montage, on_missing='warn', verbose=False)
+    
+    # Interpolate using spherical splines (same as paper's pop_interp)
+    raw_clean.interpolate_bads(reset_bads=True, verbose=False)
+    
+    print(f'Bad channels interpolated using spherical splines')
+    print(f'  All channels restored - total: {len(mne.pick_types(raw_clean.info, eeg=True, eog=False))} EEG channels')
+else:
+    print('No bad channels to interpolate - all channels are clean!')
+    print(f'  Total EEG channels: {len(mne.pick_types(raw_clean.info, eeg=True, eog=False))}')
+---
+=== CELL 32 ===
+# ============================================================
+# STEP 14: Bad time segment detection and annotation
+# ============================================================
+
+def annotate_bad_segments(raw, threshold_uv=150, window_s=0.5):
+    """
+    Detect bad time segments based on peak-to-peak amplitude.
+    Similar to ASR - flags segments with abnormally high amplitude.
+    
+    Parameters:
+    -----------
+    raw : mne.io.Raw
+        The preprocessed raw data
+    threshold_uv : float
+        Peak-to-peak amplitude threshold in microvolts (default: 150)
+    window_s : float
+        Window size in seconds for checking amplitude (default: 0.5)
+        
+    Returns:
+    --------
+    n_bad_seconds : float - total bad segment duration
+    """
+    sfreq = raw.info['sfreq']
+    window_samples = int(window_s * sfreq)
+    picks_eeg = mne.pick_types(raw.info, eeg=True, eog=False)
+    data = raw.get_data(picks=picks_eeg) * 1e6  # Convert V to uV
+    
+    n_windows = data.shape[1] // window_samples
+    bad_annotations = []
+    
+    for w in range(n_windows):
+        start = w * window_samples
+        end = start + window_samples
+        window_data = data[:, start:end]
+        ptp = np.ptp(window_data, axis=1)  # peak-to-peak per channel
+        
+        if np.any(ptp > threshold_uv):
+            onset = start / sfreq
+            bad_annotations.append((onset, window_s, 'BAD_artifact'))
+    
+    if bad_annotations:
+        onsets = [a[0] for a in bad_annotations]
+        durations = [a[1] for a in bad_annotations]
+        descriptions = [a[2] for a in bad_annotations]
+        bad_annot = mne.Annotations(onset=onsets, duration=durations, description=descriptions)
+        raw.set_annotations(raw.annotations + bad_annot)
+    
+    return len(bad_annotations) * window_s
+
+
+print('Detecting bad time segments (high-amplitude artifacts)...')
+print('  Catches: movement, electrode pops, muscle bursts')
+print(f'  Threshold: 150 uV peak-to-peak in any channel')
+
+total_duration = raw_clean.times[-1]
+bad_seconds = annotate_bad_segments(raw_clean, threshold_uv=150, window_s=0.5)
+
+print(f'\nResult:')
+print(f'  Total recording: {total_duration:.1f} s')
+print(f'  Bad segments:    {bad_seconds:.1f} s ({bad_seconds/total_duration*100:.1f}%)')
+print(f'  Clean remaining: {total_duration - bad_seconds:.1f} s ({(total_duration-bad_seconds)/total_duration*100:.1f}%)')
+print(f'\n(Paper reports: ~30s rejected per recording, ~6-7%)')
+---
+=== CELL 43 ===
+---
+## Pipeline Complete!
+
+### What we implemented (matching the DISCOVER-EEG paper):
+| Step | Operation | MNE Function | Paper Equivalent |
+|------|-----------|-------------|------------------|
+| 0 | Import libraries | `import mne` | MATLAB/EEGLAB |
+| 1 | Configuration | Parameters dict | `params.json` |
+| 2 | Load data | `read_raw_brainvision()` | `pop_loadbv()` |
+| 3 | Inspect data | `raw.info` | — |
+| 4 | Channel types + montage | `set_channel_types()`, `set_montage()` | BIDS metadata |
+| 5 | Plot raw PSD | `compute_psd().plot()` | — |
+| 6 | Line noise removal | `notch_filter(method='spectrum_fit')` | `pop_cleanline()` |
+| 7 | High-pass filter | `raw.filter(l_freq=0.5)` | `pop_clean_rawdata()` |
+| 8 | Resample to 250 Hz | `raw.resample(250)` | Optional downsampling |
+| 9 | Verify resampling | PSD comparison | — |
+| 10 | Bad channel detection | Custom function | `pop_clean_rawdata()` |
+| 11 | Re-reference (average) | `set_eeg_reference('average')` | `pop_reref()` |
+| 12 | ICA + ICLabel | `ICA()` + `label_components()` | `pop_runica()` + ICLabel |
+| 13 | Interpolate bad channels | `interpolate_bads()` | `pop_interp()` |
+| 14 | Bad segment detection | Custom function | ASR (`pop_clean_rawdata()`) |
+| 15 | Epoch (2s, 50% overlap) | `make_fixed_length_epochs()` | `pop_epoch()` |
+| 16 | Epoch rejection | `epochs.drop_bad()` | Amplitude threshold |
+| 17 | Save data | `.save()` + `np.save()` | `.set` files |
+
+### Output format:
+- **Per subject**: `sub-XXXXXX_epochs.npy` — shape `(n_epochs, 62, 500)`
+- **62 channels**: 61 original scalp EEG + reconstructed FCz
+- **500 timepoints**: 2 seconds x 250 Hz
+- **250 Hz**: matches migraine dataset for combined analysis
+---

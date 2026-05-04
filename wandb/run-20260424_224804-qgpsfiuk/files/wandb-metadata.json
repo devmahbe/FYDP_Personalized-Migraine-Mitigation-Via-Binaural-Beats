@@ -1,0 +1,40 @@
+{
+  "os":  "Windows-11-10.0.26200-SP0",
+  "python":  "CPython 3.14.2",
+  "startedAt":  "2026-04-24T16:48:04.259610Z",
+  "program":  "g:\\Study\\FYDP-I_Personalized-Migraine-Mitigation-Via-Binaural-Beats\\LEMON_Full_Batch_Only.ipynb",
+  "codePath":  "g:\\Study\\FYDP-I_Personalized-Migraine-Mitigation-Via-Binaural-Beats\\LEMON_Full_Batch_Only.ipynb",
+  "codePathLocal":  "LEMON_Full_Batch_Only.ipynb",
+  "git":  {
+    "remote":  "https://github.com/devmahbe/FYDP-I_Personalized-Migraine-Mitigation-Via-Binaural-Beats.git",
+    "commit":  "0e0440bccd6919218db65b252fc61526551734b9"
+  },
+  "email":  "amahbe223043@bscse.uiu.ac.bd",
+  "root":  "g:\\Study\\FYDP-I_Personalized-Migraine-Mitigation-Via-Binaural-Beats",
+  "host":  "Mahbe",
+  "executable":  "g:\\Study\\FYDP-I_Personalized-Migraine-Mitigation-Via-Binaural-Beats\\venv\\Scripts\\python.exe",
+  "cpu_count":  6,
+  "cpu_count_logical":  12,
+  "gpu":  "NVIDIA GeForce GTX 1650",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "250041331712",
+      "used":  "92977025024"
+    }
+  },
+  "memory":  {
+    "total":  "17024921600"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA GeForce GTX 1650",
+      "memoryTotal":  "4294967296",
+      "cudaCores":  896,
+      "architecture":  "Turing",
+      "uuid":  "GPU-31c1a204-bd42-6e0f-3191-b7b492f3a984"
+    }
+  ],
+  "cudaVersion":  "13.2",
+  "writerId":  "b74pvoovxaf0ftnxr96gb4wd263ws12l"
+}
