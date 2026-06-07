@@ -1,263 +1,228 @@
 # LEMON Full Batch Preprocessing Documentation
 
-## Project Context
+## 1. What This Notebook Does
 
-This document describes the full preprocessing workflow implemented in:
+The notebook [LEMON_Full_Batch_Only.ipynb](../LEMON_Full_Batch_Only.ipynb) is a full batch preprocessing workflow for the LEMON EEG dataset. Its purpose is to take raw BrainVision recordings from many subjects and turn them into cleaner, standardized EEG epochs that can be used later for machine learning, analysis, and model training.
 
-- `LEMON_Full_Batch_Only.ipynb`
+The notebook is intentionally batch-only. That means it does not focus on one example subject for demonstration. Instead, it is designed to process the whole dataset in one consistent pipeline so that every subject is treated in the same way. This is important because a uniform preprocessing strategy makes the results easier to compare and more suitable for downstream modeling.
 
-The notebook performs automated, subject-wise EEG preprocessing for all LEMON participants in batch mode, with optional Weights and Biases (W&B) tracking.
+## 2. Why This Workflow Is Structured This Way
 
-## Followed Reference Paper
+EEG data is sensitive to noise, bad sensors, movement, eye activity, and recording differences across participants. If these issues are not handled early, later analysis can become misleading or unstable. The pipeline therefore follows a careful order:
 
-The preprocessing workflow is based on the pipeline referenced in the project as:
+1. Clean the raw signal.
+2. Identify noisy channels.
+3. Remove or reduce artifact-related components.
+4. Mark visibly corrupted time segments.
+5. Split the signal into standardized epochs.
+6. Save the result in reusable file formats.
 
-- **DISCOVER-EEG (Gil Avila et al., 2023, Scientific Data)**
+This structure is practical because each step makes the next step more reliable. For example, removing bad channels before ICA improves the quality of the component separation. Likewise, epoching only after cleaning helps ensure that the final dataset is more consistent and easier to reuse.
 
-In your repository, this is stated explicitly in `LEMON_Preprocessing_Pipeline.ipynb` as the guiding paper and pipeline source.
-
-## Objective of This Pipeline
-
-The pipeline transforms raw BrainVision EEG recordings into clean, fixed-format epochs suitable for downstream ML tasks (transfer learning and migraine classifier fine-tuning).
-
-Primary goals:
-
-1. Remove line noise, drift, and artifacts.
-2. Detect and repair noisy channels.
-3. Remove ICA components likely representing eye and muscle artifacts.
-4. Remove high-amplitude bad time segments.
-5. Create overlapping fixed-length epochs with consistent shape.
-6. Save outputs in reproducible formats (`.fif` and `.npy`).
-
-## Data Inputs and Outputs
+## 3. Data Flow Overview
 
 ### Input
 
-- **Raw source folder:**
-  - `EEG_MPILMBB_LEMON/EEG_Raw_BIDS_ID/sub-*/RSEEG/sub-*.vhdr`
-- **File format:** BrainVision (`.vhdr`, `.eeg`, `.vmrk`)
+The notebook reads raw EEG recordings from the LEMON folder structure, mainly from BrainVision files:
+
+- `.vhdr` header files
+- `.eeg` signal files
+- `.vmrk` marker files
 
 ### Output
 
-- **Output folder:**
-  - `data/LEMON_preprocessed`
-- **Per subject output files:**
-  - `sub-XXXXXX-epo.fif`
-  - `sub-XXXXXX_epochs.npy`
-- **Shared output files:**
-  - `channel_names.txt` (created once)
-  - `preprocessing_summary.csv`
+Cleaned outputs are saved in `data/LEMON_preprocessed` as:
 
-## High-Level Pipeline Stages
+- `.fif` epoch files for MNE compatibility
+- `.npy` arrays for machine learning workflows
+- `channel_names.txt` for consistent channel reference
+- CSV summaries for tracking results across subjects
+- figures in a `figures` subfolder for reporting and review
 
-1. Environment setup and import checks.
-2. Parameter initialization.
-3. Bad-channel detection helper.
-4. Bad-segment annotation helper.
-5. Subject-level preprocessing function.
-6. Batch loop over all subjects.
-7. Final summary and CSV export.
+## 4. Main Libraries Used
 
-## Detailed Step-by-Step Workflow
+| Library | Role in the notebook | Why it matters |
+| --- | --- | --- |
+| `mne` | EEG loading, filtering, re-referencing, ICA, epoching, saving | This is the core EEG analysis library and handles the scientific preprocessing steps |
+| `numpy` | Numeric operations and array handling | Useful for signal calculations and storing epoch data |
+| `pandas` | Tabular summaries and CSV export | Makes it easy to organize subject results and report outcomes |
+| `mne_icalabel` | Automatic ICA component labeling | Helps identify components linked to eye, muscle, or other artifacts |
+| `pyprep` | Bad-channel detection | Provides a robust way to detect unreliable EEG channels |
+| `cupy` | Optional GPU acceleration | Speeds up some calculations when a CUDA-capable system is available |
+| `wandb` | Optional tracking and logging | Useful for monitoring the batch run and keeping a processing record |
+| `matplotlib` / `seaborn` | Plotting and visualization | Used to summarize outcomes in a readable visual form |
 
-### Step 1: Imports and Runtime Checks
+The notebook is built so that it still runs even if some optional libraries are missing. In particular, `wandb` and `cupy` are treated as optional enhancements rather than strict requirements.
 
-Libraries used:
+## 5. Parameters and What They Mean
 
-- `mne`, `numpy`, `pandas`, `glob`, `os`, `time`, `warnings`
-- `mne_icalabel` for automatic ICA component labeling
-- Optional: `wandb` for experiment logging
-- Optional: `cupy` + `mne.cuda` for GPU acceleration
+| Parameter | Value | Meaning | Why it is used |
+| --- | --- | --- | --- |
+| `TARGET_SFREQ` | `250` | Final sampling rate | A balanced rate that keeps EEG detail while reducing file size and computation time |
+| `LINE_NOISE_FREQ` | `50` | Power-line noise frequency | Removes electrical interference common in many recording environments |
+| `HIGHPASS_FREQ` | `1.0` | High-pass filter cutoff | Reduces slow drift and baseline wandering |
+| `LOWPASS_FREQ` | `100.0` | Low-pass filter cutoff | Keeps useful EEG information while reducing high-frequency noise |
+| `IC_REJECTION_THRESHOLD` | `0.80` | Confidence threshold for rejecting ICA components | Keeps rejection conservative so only likely artifact components are removed |
+| `EPOCH_DURATION` | `4.0` | Length of each epoch in seconds | Produces segments long enough to contain useful EEG context |
+| `EPOCH_OVERLAP` | `0.5` | 50% overlap between epochs | Increases the number of usable samples without losing continuity |
+| `AMPLITUDE_REJECT_UV` | `250e-6` | Peak-to-peak rejection threshold | Removes epochs that are too noisy or too large in amplitude |
+| `IC_REJECT_FRACTION_FLAG` | `0.25` | Quality flag threshold for ICA rejection rate | Warns when too many components are removed |
+| `EPOCH_KEEP_RATIO_FLAG` | `0.5` | Quality flag threshold for epoch retention | Warns when too much data is lost during epoch rejection |
 
-Behavior:
+These parameters reflect a practical balance between signal quality and data retention. The notebook is not trying to over-clean the EEG to the point of losing data; instead, it aims to remove the most obvious noise while keeping enough usable signal for later analysis.
 
-- Tries to enable CUDA filtering/resampling if available.
-- Falls back to CPU mode if CUDA/CuPy is unavailable.
+## 6. Step-by-Step Pipeline
 
-### Step 2: Paths and Global Parameters
+### 6.1 Environment Checks and Imports
 
-Configured parameters in `LEMON_Full_Batch_Only.ipynb`:
+The notebook first imports the required libraries and checks whether optional tools are available. It also tries to detect a CUDA installation so that GPU acceleration can be enabled when possible.
 
-- `TARGET_SFREQ = 250`
-- `LINE_NOISE_FREQ = 50`
-- `HIGHPASS_FREQ = 1.0`
-- `IC_REJECTION_THRESHOLD = 0.80`
-- `EPOCH_DURATION = 4.0`
-- `EPOCH_OVERLAP = 0.5`
-- `AMPLITUDE_REJECT_UV = 250e-6`
+This is done because EEG preprocessing can be computationally expensive, especially when the batch includes many subjects. Using GPU support when available can reduce runtime, but the notebook still needs to work on standard CPU-only machines.
 
-Notes:
+### 6.2 Optional Weights and Biases Logging
 
-- The pipeline is intentionally set to 250 Hz to align with downstream data integration and model expectations.
-- Epoch size here is 4 seconds with 50% overlap (different from the separate 2-second demonstration notebook).
+If `wandb` is installed and configured, the notebook opens a logging session and records subject-level progress, summary metrics, and a final table of results.
 
-### Step 2b: Optional W&B Tracking
+This is useful because long preprocessing jobs can take a lot of time. Logging makes it easier to monitor progress, identify failures, and review the run later without manually checking every subject.
 
-If `wandb` is installed and configured:
+### 6.3 Bad Channel Detection
 
-- Initializes run metadata.
-- Logs subject-level progress and running success rate.
-- Logs final summary table and aggregate metrics.
+The helper function `detect_bad_channels` uses PyPREP to identify channels that appear unreliable. It checks for several common problems such as flat signals, abnormal deviation, excessive high-frequency noise, and poor correlation with neighboring channels. It also attempts a RANSAC-based check when possible.
 
-If unavailable or fails:
+This step is important because a noisy channel can distort the rest of the preprocessing pipeline. Identifying bad channels early helps protect later steps such as filtering, re-referencing, and ICA.
 
-- Continues preprocessing without interrupting the pipeline.
+### 6.4 Bad Segment Annotation
 
-### Step 3: Bad Channel Detection (`detect_bad_channels`)
+The helper function `annotate_bad_segments` scans the EEG in short windows and marks windows as bad when the peak-to-peak amplitude becomes too large. In this notebook, the window size is 0.5 seconds and the threshold is 250 microvolts.
 
-Method:
+The reason for this approach is that some artifacts are brief but strong, such as movement or sudden electrical interference. Rather than removing the entire recording, the notebook marks only the affected segments so that the rest of the data can still be used.
 
-- Uses PyPREP `NoisyChannels` logic (clean_rawdata-style behavior).
-- Evaluates channels using:
-  - NaN/flat criteria
-  - deviation
-  - high-frequency noise
-  - correlation
-- Attempts RANSAC check when possible.
+### 6.5 Subject-Level Preprocessing Function
 
-Implementation details:
+The heart of the notebook is the function `preprocess_lemon_subject`. It is called once for each subject and performs the full cleaning pipeline.
 
-- Excludes `FCz` during this detection stage (reference handling).
-- Returns:
-  - sorted bad channel list
-  - whether RANSAC was successfully used
+#### a. Load the Raw EEG
 
-### Step 4: Bad Segment Annotation (`annotate_bad_segments`)
+The BrainVision file is read into memory with `preload=True`, which allows the signal to be processed efficiently.
 
-Method:
+#### b. Prepare the Channels
 
-- Sliding window peak-to-peak amplitude check.
-- Converts EEG to microvolts.
-- Marks windows as `BAD_artifact` if any channel exceeds threshold.
+The notebook marks `VEOG` as an eye-related channel, adds `FCz` if it is missing, and applies the standard 10-05 montage.
 
-Configured call in full batch function:
+This matters because EEG processing tools work better when the channel layout is known. A montage gives the signal a spatial structure, which is needed for channel-level interpretation and interpolation.
 
-- threshold: 250 uV
-- window: 0.5 s
+#### c. Filter and Resample
 
-Output:
+The signal is notched at 50 Hz and its harmonic, high-pass filtered at 1 Hz, low-pass filtered at 100 Hz, and then resampled to 250 Hz.
 
-- Total bad-segment duration in seconds (`bad_segments_s`).
+This is done to clean up the signal and make all subjects share the same sampling rate. A consistent sampling rate is especially useful when the outputs will later be used in machine learning models.
 
-### Step 5: Subject-Level Preprocessing (`preprocess_lemon_subject`)
+#### d. Detect and Temporarily Remove Bad Channels
 
-This is the core function, executed once per subject.
+The detected bad channels are stored and temporarily removed before ICA.
 
-#### 5.1 Load Raw EEG
+This step improves ICA quality because artifact-heavy or broken channels can otherwise affect the decomposition.
 
-- Reads BrainVision file with preload enabled.
+#### e. Re-reference the Signal
 
-#### 5.2 Channel Setup
+The cleaned signal is re-referenced using the average reference.
 
-- Marks `VEOG` as EOG.
-- Adds `FCz` if missing.
-- Applies `standard_1005` montage.
+Average referencing is a common EEG strategy because it reduces the influence of any one electrode and gives a more balanced view of brain activity.
 
-#### 5.3 Filtering and Resampling
+#### f. Run ICA and Label Components
 
-- Notch filter at `50` and `100` Hz (power line and harmonic).
-- High-pass filter at `1.0` Hz.
-- Resample to `250` Hz.
+Independent Component Analysis is performed using the `infomax` method with `extended=True`. The resulting components are then labeled with ICLabel.
 
-#### 5.4 Bad Channel Marking and Temporary Removal
+The notebook rejects components that are confidently identified as artifacts such as eye activity, muscle activity, heart beat, line noise, channel noise, or other non-brain sources.
 
-- Detects bad channels via PyPREP helper.
-- Stores count in result dictionary.
-- Drops bad channels before ICA.
+This is one of the most important cleaning steps because it removes structured artifact patterns while preserving the underlying EEG signal as much as possible.
 
-#### 5.5 Re-reference
+#### g. Restore Removed Channels
 
-- Applies average reference (`projection=False`).
+Any bad channels that were removed are added back, marked as bad, and interpolated.
 
-#### 5.6 ICA + ICLabel Artifact Rejection
+This makes the final signal more complete again. Instead of permanently deleting channels, the notebook estimates their likely values based on surrounding information, which helps keep the data shape consistent across subjects.
 
-- ICA method: `infomax`, `extended=True`.
-- Number of components: `n_eeg - 1`.
-- ICLabel probabilities are computed.
-- Rejects ICs when:
-  - `P(muscle) > 0.80` OR
-  - `P(eye) > 0.80`
+#### h. Annotate Remaining Bad Segments
 
-#### 5.7 Reconstruct Dropped Channels
+The notebook marks high-amplitude segments as artifacts so they can be excluded from the epoching stage.
 
-- Adds removed channels back.
-- Marks them as bad.
-- Restores montage.
-- Runs spherical interpolation (`interpolate_bads`).
+#### i. Create Fixed-Length Epochs
 
-#### 5.8 Bad Time Segment Annotation
+The continuous EEG is converted into 4-second overlapping epochs with 50% overlap.
 
-- Adds `BAD_artifact` annotations based on amplitude thresholding.
+This is helpful because fixed-length epochs are easier to compare across subjects and easier to feed into downstream models. Overlap also improves data utilization by creating more training examples from the same recording.
 
-#### 5.9 Epoching
+#### j. Reject Noisy Epochs
 
-- Keeps EEG channels only.
-- Uses fixed-length epochs:
-  - duration = 4.0 s
-  - overlap = 2.0 s (50%)
+Epochs that exceed the amplitude threshold are removed.
 
-#### 5.10 Epoch Rejection
+This final cleaning step helps make the exported data more reliable by excluding segments that still show obvious noise after earlier processing.
 
-- Drops epochs with EEG peak-to-peak > `250e-6` V.
-- Stores counts before and after rejection.
+#### k. Save the Results
 
-#### 5.11 Save Outputs
+Each subject produces a saved `.fif` file and `.npy` file. The notebook also writes `channel_names.txt` once, so the saved data can be interpreted consistently later.
 
-- Saves `.fif` epochs file.
-- Saves `.npy` array of epochs data.
-- Saves `channel_names.txt` if not already present.
+### 6.6 Batch Processing Loop
 
-#### 5.12 Structured Result Return
+The notebook loops through all subject folders in the dataset and handles each case in a practical way:
 
-Returns per-subject dictionary including:
+1. If the subject has already been processed, it is skipped.
+2. If the `.vhdr` file is missing, the subject is recorded as missing.
+3. If the subject is ready, the preprocessing function is executed.
+4. Processing time and counts are tracked for later review.
 
-- status (`success`/`failed`)
-- elapsed time
-- bad-channel count
-- rejected-IC count
-- bad segment duration
-- epochs before/after
-- epoch tensor shape
-- error text when failed
+This design makes the notebook safe to rerun. If the batch is interrupted, already completed subjects do not need to be repeated from scratch.
 
-### Step 6: Full Batch Loop
+### 6.7 Final Summary and Reporting
 
-Batch logic in notebook:
+After all subjects are processed, the notebook builds a table of results and saves a CSV summary. It also creates plots showing:
 
-1. Enumerates all subject directories.
-2. Skips subjects already processed (`*_epochs.npy` exists).
-3. Skips subjects with missing `.vhdr`.
-4. Processes remaining subjects with timing.
-5. Maintains counters:
-   - `success_count`
-   - `failed_count`
-   - `missing_count`
-   - `skipped_count`
-   - `active_attempts`
-6. Optionally logs each step to W&B.
+- subject-wise success or failure
+- number of bad channels per subject
+- ICA rejection fraction
+- epoch retention rate
+- bad-channel frequency across the cohort
+- a bad-channel heatmap
+- runtime diagnostics
 
-### Step 7: Summary and Export
+These plots are useful because they turn the preprocessing run into something that can be interpreted at a glance. Instead of only storing cleaned data, the notebook also records how clean each subject was and where the main problems appeared.
 
-After batch completion:
+## 7. Why the Final Outputs Are Saved in Two Formats
 
-- Builds DataFrame from successful subjects.
-- Prints aggregate statistics.
-- Saves CSV summary:
-  - `data/LEMON_preprocessed/preprocessing_summary.csv`
-- If W&B active, logs final table and summary metrics, then closes run.
+The notebook saves both `.fif` and `.npy` outputs because they serve different purposes:
 
-## Output Data Contract for Downstream ML
+- `.fif` is the native MNE format and is useful if the data will be revisited with EEG tools later.
+- `.npy` is simple and efficient for machine learning workflows.
 
-Typical structure:
+Keeping both formats makes the pipeline more flexible and reduces the need to preprocess the data again later.
 
-- shape: `(n_epochs, n_channels, n_times)`
-- channels: EEG-only after cleaning and channel restoration
-- sample rate: 250 Hz
-- epoch duration: 4 s
+## 8. What the Quality Flags Mean
 
-This stable contract is crucial for:
+The notebook does not only clean the data; it also checks whether the cleaning became too aggressive.
 
-- LEMON encoder pretraining compatibility.
+- A high ICA rejection fraction suggests that the subject may have had strong artifact contamination.
+- A low epoch keep ratio suggests that a large portion of the recording was discarded.
+
+These are warnings rather than hard failures. The purpose is to help the researcher review subjects that may need special attention without stopping the whole batch.
+
+## 9. Practical Value of the Notebook
+
+This preprocessing notebook is useful because it creates a reproducible and consistent dataset from raw EEG recordings. That consistency is especially important in projects like this one, where the preprocessed EEG may later support:
+
+- feature extraction
+- group comparisons
+- model training
+- transfer learning
+- clinical or intervention-oriented analysis
+
+In simple terms, the notebook turns noisy raw EEG into a cleaner research dataset that is easier to trust and reuse.
+
+## 10. Short Summary
+
+In one sentence, this notebook takes raw LEMON EEG recordings, cleans them using standard EEG methods, segments them into reusable epochs, and saves the results in analysis-friendly formats with summary statistics and plots.
+
+The overall design is sensible because it combines signal cleaning, quality control, automation, and reporting in one reproducible batch workflow.
 - Migraine classifier fine-tuning pipeline.
 - Reproducibility across subjects.
 

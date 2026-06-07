@@ -340,6 +340,7 @@ def main():
     files_to_convert = [
         ('PREPROCESSING_EASY_GUIDE_AND_DEFENSE_QA.md', 'PREPROCESSING_EASY_GUIDE_AND_DEFENSE_QA.docx'),
         ('RESEARCH_PAPER_DOCUMENTATION.md', 'RESEARCH_PAPER_DOCUMENTATION.docx'),
+        ('PREPROCESSING_PIPELINE_DIAGRAM.md', 'PREPROCESSING_PIPELINE_DIAGRAM.docx'),
     ]
     
     for md_name, docx_name in files_to_convert:
