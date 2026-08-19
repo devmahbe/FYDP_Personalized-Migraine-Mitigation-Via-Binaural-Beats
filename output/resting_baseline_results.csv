@@ -1,0 +1,4 @@
+model,window_auc,window_auc_std,subject_auc,subject_accuracy,subject_precision,subject_recall,subject_f1,n_subjects,n_migraine,n_control,cm_tn,cm_fp,cm_fn,cm_tp
+LogisticRegression,,,0.5592592592592592,0.5454545454545454,0.5,0.4666666666666667,0.4827586206896552,33,15,18,11,7,8,7
+RandomForest,,,0.30000000000000004,0.3333333333333333,0.0,0.0,0.0,33,15,18,11,7,15,0
+SVM_RBF,,,0.5148148148148148,0.5454545454545454,0.5,0.4,0.4444444444444444,33,15,18,12,6,9,6
